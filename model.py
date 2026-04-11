@@ -33,6 +33,8 @@
 
 import torch
 import torch.nn.functional as F
+import einops
+
 from torch import nn
 from dataclasses import dataclass
 
@@ -90,15 +92,16 @@ class Attention(nn.Module):
         K = self.k_proj(x) # (batch, seq, kv_heads * head_dim)
         V = self.v_proj(x) # (batch, seq, kv_heads * head_dim)
 
-        q_heads = Q.view(batch, seq, self.heads, self.head_dim).transpose(1, 2) # (batch, heads, seq, head_dim)
-        k_heads = K.view(batch, seq, self.kv_heads, self.head_dim).transpose(1, 2) # (batch, kv_heads, seq, head_dim)
-        v_heads = V.view(batch, seq, self.kv_heads, self.head_dim).transpose(1, 2) # (batch, kv_heads, seq, head_dim)
+        q_heads = einops.rearrange(Q, "b s (h d) -> b h s d", h=self.heads) # (batch, heads, seq, head_dim)
+        k_heads = einops.rearrange(K, "b s (k d) -> b k d s", k=self.kv_heads) # (batch, kv_heads, head_dim, seq)
+        v_heads = einops.rearrange(V, "b s (v d) -> b v s d", v=self.kv_heads) # (batch, kv_heads, seq, head_dim)
 
-        k_heads = k_heads.repeat_interleave(self.heads // self.kv_heads, dim=1) # (batch, heads, seq, head_dim)
-        v_heads = v_heads.repeat_interleave(self.heads // self.kv_heads, dim=1) # (batch, heads, seq, head_dim)
+        kv_repeat = self.heads // self.kv_heads
+        k_heads = einops.repeat(k_heads, "b k d s -> b (r k) d s", r=kv_repeat)
+        v_heads = einops.repeat(v_heads, "b v s d -> b (r v) s d", r=kv_repeat)
 
         scale = 1 / (self.head_dim ** 0.5)
-        qk = q_heads @ k_heads.transpose(-2, -1) * scale # (batch, heads, seq, seq)
+        qk = q_heads @ k_heads * scale # (batch, heads, seq, seq)
 
         causal_mask = torch.triu(torch.ones(seq, seq), diagonal=1) * -torch.inf
         qk = qk + causal_mask # (batch, heads, seq, seq)
@@ -106,7 +109,7 @@ class Attention(nn.Module):
         attn = F.softmax(qk, dim=-1)
 
         attn_v = attn @ v_heads # (batch, heads, seq, head_dim)
-        attn_v = attn_v.transpose(1, 2).view(batch, seq, self.heads * self.head_dim) # (batch, seq, heads * head_dim)
+        attn_v = einops.rearrange(attn_v, "b h s d -> b s (h d)") # (batch, seq, heads * head_dim)
 
         out = self.o_proj(attn_v) # (batch, seq, hidden)
         assert out.shape == (batch, seq, hidden)
