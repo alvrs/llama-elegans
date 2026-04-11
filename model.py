@@ -31,6 +31,7 @@
 # RMSnorm
 # lm_head
 
+import torch as t
 from torch import nn
 from dataclasses import dataclass
 
@@ -41,6 +42,18 @@ class Config:
     kv_heads: int = 1
     intermediate: int = 1024
     head_dim = 64
+
+class RMSnorm(nn.Module):
+    def __init__(self, config: Config):
+        super().__init__()
+        self.gamma = nn.Parameter(t.ones(config.hidden_size))
+
+    def forward(self, x):
+        assert len(x.shape) == 3 # batch, seq, hidden
+        s = x ** 2
+        ms = s.mean(dim=-1, keepdim=True)
+        rms = ms ** 0.5
+        return (x / rms) * self.gamma
 
 class LlamaElegans(nn.Module):
 
