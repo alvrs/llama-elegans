@@ -46,6 +46,26 @@ class Config:
     intermediate: int = 1024
     head_dim: int = 64
     vocab_size: int = 4096
+    max_seq_len: int = 2048
+
+def get_rope_angles(config: Config):
+    n_pairs = config.head_dim // 2
+    pairs = torch.arange(n_pairs)
+    freq = 1 / (10_000 ** (pairs / n_pairs))
+    pos = torch.arange(config.max_seq_len)
+    angles = torch.outer(pos, freq)
+    return angles
+
+def apply_rope(sin_table: torch.Tensor, cos_table: torch.Tensor, x: torch.Tensor):
+    assert len(x.shape) == 4 # (batch, heads, seq, head_dim)
+    seq = x.size(2)
+    cos = cos_table[:seq, :][None, None, :, :]
+    sin = sin_table[:seq, :][None, None, :, :]
+    pairs = einops.rearrange(x, "b h s (pairs i) -> b h s pairs i", i=2)
+    x_new = pairs[..., 0] * cos - pairs[..., 1] * sin
+    y_new = pairs[..., 0] * sin + pairs[..., 1] * cos 
+    result = torch.stack([x_new, y_new], dim=-1)
+    return einops.rearrange(result, "b h s pairs i -> b h s (pairs i)")
 
 class RMSnorm(nn.Module):
     def __init__(self, config: Config):
@@ -119,6 +139,8 @@ class Attention(nn.Module):
 class Decoder(nn.Module):
     def __init__(self, config: Config):
         super().__init__()
+        self.cos_table = torch.cos(get_rope_angles(config))
+        self.sin_table = torch.sin(get_rope_angles(config))
     
     def forward(self, x):
         # TODO: implement
