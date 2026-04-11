@@ -51,7 +51,7 @@ class RMSnorm(nn.Module):
         self.gamma = nn.Parameter(torch.ones(config.hidden_size))
 
     def forward(self, x):
-        assert len(x.shape) == 3 # batch, seq, hidden
+        assert len(x.shape) == 3 # (batch, seq, hidden)
         s = x ** 2
         ms = s.mean(dim=-1, keepdim=True)
         rms = ms ** 0.5
@@ -65,11 +65,53 @@ class MLP(nn.Module):
         self.down_proj = nn.Linear(config.intermediate, config.hidden_size, bias=False)
 
     def forward(self, x):
-        assert len(x.shape) == 3 # batch, seq, hidden
+        assert len(x.shape) == 3 # (batch, seq, hidden)
         up = self.up_proj(x)
         gate = F.silu(self.gate_proj(x))
         intermediate = gate * up
         return self.down_proj(intermediate)
+
+class Attention(nn.Module):
+    def __init__(self, config: Config):
+        super().__init__()
+        self.q_proj = nn.Linear(config.hidden_size, config.heads * config.head_dim, bias=False)
+        self.k_proj = nn.Linear(config.hidden_size, config.kv_heads * config.head_dim, bias=False)
+        self.v_proj = nn.Linear(config.hidden_size, config.kv_heads * config.head_dim, bias=False)
+        self.o_proj = nn.Linear(config.heads * config.head_dim, config.hidden_size, bias=False)
+        self.head_dim = config.head_dim
+        self.heads = config.heads
+        self.kv_heads = config.kv_heads
+    
+    def forward(self, x):
+        assert len(x.shape) == 3 # (batch, seq, hidden)
+        batch, seq, hidden = x.shape
+
+        Q = self.q_proj(x) # (batch, seq, heads * head_dim)
+        K = self.k_proj(x) # (batch, seq, kv_heads * head_dim)
+        V = self.v_proj(x) # (batch, seq, kv_heads * head_dim)
+
+        q_heads = Q.view(batch, seq, self.heads, self.head_dim).transpose(1, 2) # (batch, heads, seq, head_dim)
+        k_heads = K.view(batch, seq, self.kv_heads, self.head_dim).transpose(1, 2) # (batch, kv_heads, seq, head_dim)
+        v_heads = V.view(batch, seq, self.kv_heads, self.head_dim).transpose(1, 2) # (batch, kv_heads, seq, head_dim)
+
+        k_heads = k_heads.repeat_interleave(self.heads // self.kv_heads, dim=1) # (batch, heads, seq, head_dim)
+        v_heads = v_heads.repeat_interleave(self.heads // self.kv_heads, dim=1) # (batch, heads, seq, head_dim)
+
+        scale = 1 / (self.head_dim ** 0.5)
+        qk = q_heads @ k_heads.transpose(-2, -1) * scale # (batch, heads, seq, seq)
+
+        causal_mask = torch.triu(torch.ones(seq, seq), diagonal=1) * -torch.inf
+        qk = qk + causal_mask # (batch, heads, seq, seq)
+
+        attn = F.softmax(qk, dim=-1)
+
+        attn_v = attn @ v_heads # (batch, heads, seq, head_dim)
+        attn_v = attn_v.transpose(1, 2).view(batch, seq, self.heads * self.head_dim) # (batch, seq, heads * head_dim)
+
+        out = self.o_proj(attn_v) # (batch, seq, hidden)
+        assert out.shape == (batch, seq, hidden)
+
+        return out
 
 class Decoder(nn.Module):
     def __init__(self, config: Config):
@@ -88,7 +130,7 @@ class LlamaElegans(nn.Module):
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
     def forward(self, x):
-        assert len(x.shape) == 2 # batch, seq 
+        assert len(x.shape) == 2 # (batch, seq)
         x = self.embed(x)
         x = self.layer(x)
         x = self.norm(x)
