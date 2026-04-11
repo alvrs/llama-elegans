@@ -32,6 +32,7 @@
 # lm_head
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 from dataclasses import dataclass
 
@@ -56,6 +57,20 @@ class RMSnorm(nn.Module):
         rms = ms ** 0.5
         return (x / rms) * self.gamma
 
+class MLP(nn.Module):
+    def __init__(self, config: Config):
+        super().__init__()
+        self.up_proj = nn.Linear(config.hidden_size, config.intermediate, bias=False)
+        self.gate_proj = nn.Linear(config.hidden_size, config.intermediate, bias=False)
+        self.down_proj = nn.Linear(config.intermediate, config.hidden_size, bias=False)
+
+    def forward(self, x):
+        assert len(x.shape) == 3 # batch, seq, hidden
+        up = self.up_proj(x)
+        gate = F.silu(self.gate_proj(x))
+        intermediate = gate * up
+        return self.down_proj(intermediate)
+
 class Decoder(nn.Module):
     def __init__(self, config: Config):
         super().__init__()
@@ -70,7 +85,7 @@ class LlamaElegans(nn.Module):
         self.embed = nn.Embedding(num_embeddings=config.vocab_size, embedding_dim=config.hidden_size)
         self.layer = Decoder(config)
         self.norm = RMSnorm(config)
-        self.lm_head = nn.Linear(in_features=config.hidden_size, out_features=config.vocab_size, bias=False)
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
     def forward(self, x):
         assert len(x.shape) == 2 # batch, seq 
