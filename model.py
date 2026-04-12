@@ -94,6 +94,8 @@ class MLP(nn.Module):
         return self.down_proj(intermediate)
 
 class Attention(nn.Module):
+    causal_mask: torch.Tensor
+
     def __init__(self, config: Config):
         super().__init__()
         self.q_proj = nn.Linear(config.hidden_size, config.heads * config.head_dim, bias=False)
@@ -103,6 +105,8 @@ class Attention(nn.Module):
         self.head_dim = config.head_dim
         self.heads = config.heads
         self.kv_heads = config.kv_heads
+        causal_mask = torch.triu(torch.ones(config.max_seq_len, config.max_seq_len), diagonal=1) * -torch.inf
+        self.register_buffer('causal_mask', causal_mask)
     
     def forward(self, x):
         assert len(x.shape) == 3 # (batch, seq, hidden)
@@ -123,8 +127,7 @@ class Attention(nn.Module):
         scale = 1 / (self.head_dim ** 0.5)
         qk = q_heads @ k_heads * scale # (batch, heads, seq, seq)
 
-        causal_mask = torch.triu(torch.ones(seq, seq), diagonal=1) * -torch.inf
-        qk = qk + causal_mask # (batch, heads, seq, seq)
+        qk = qk + self.causal_mask[:seq, :seq] # (batch, heads, seq, seq)
 
         attn = F.softmax(qk, dim=-1)
 
@@ -137,10 +140,13 @@ class Attention(nn.Module):
         return out
 
 class Decoder(nn.Module):
+    cos_table: torch.Tensor
+    sin_table: torch.Tensor
+    
     def __init__(self, config: Config):
         super().__init__()
-        self.cos_table = torch.cos(get_rope_angles(config))
-        self.sin_table = torch.sin(get_rope_angles(config))
+        self.register_buffer('cos_table', torch.cos(get_rope_angles(config))) 
+        self.register_buffer('sin_table', torch.sin(get_rope_angles(config)))
     
     def forward(self, x):
         # TODO: implement
