@@ -56,7 +56,7 @@ def get_rope_angles(config: Config):
     angles = torch.outer(pos, freq)
     return angles
 
-def apply_rope(sin_table: torch.Tensor, cos_table: torch.Tensor, x: torch.Tensor):
+def apply_rope(x: torch.Tensor, cos_table: torch.Tensor, sin_table: torch.Tensor):
     assert len(x.shape) == 4 # (batch, heads, seq, head_dim)
     seq = x.size(2)
     cos = cos_table[:seq, :][None, None, :, :]
@@ -108,8 +108,13 @@ class Attention(nn.Module):
         causal_mask = torch.triu(torch.ones(config.max_seq_len, config.max_seq_len), diagonal=1) * -torch.inf
         self.register_buffer('causal_mask', causal_mask)
     
-    def forward(self, x):
+    def forward(self, x, cos, sin):
         assert len(x.shape) == 3 # (batch, seq, hidden)
+        assert len(cos.shape) == 2 # (seq, pairs)
+        assert len(sin.shape) == 2 # (seq, pairs)
+        assert cos.size(0) == x.size(1)
+        assert sin.size(0) == x.size(1)
+
         batch, seq, hidden = x.shape
 
         Q = self.q_proj(x) # (batch, seq, heads * head_dim)
@@ -117,15 +122,18 @@ class Attention(nn.Module):
         V = self.v_proj(x) # (batch, seq, kv_heads * head_dim)
 
         q_heads = einops.rearrange(Q, "b s (h d) -> b h s d", h=self.heads) # (batch, heads, seq, head_dim)
-        k_heads = einops.rearrange(K, "b s (k d) -> b k d s", k=self.kv_heads) # (batch, kv_heads, head_dim, seq)
+        k_heads = einops.rearrange(K, "b s (k d) -> b k s d", k=self.kv_heads) # (batch, kv_heads, seq, head_dim)
         v_heads = einops.rearrange(V, "b s (v d) -> b v s d", v=self.kv_heads) # (batch, kv_heads, seq, head_dim)
 
         kv_repeat = self.heads // self.kv_heads
-        k_heads = einops.repeat(k_heads, "b k d s -> b (r k) d s", r=kv_repeat)
-        v_heads = einops.repeat(v_heads, "b v s d -> b (r v) s d", r=kv_repeat)
+        k_heads = einops.repeat(k_heads, "b k s d -> b (r k) s d", r=kv_repeat) # (batch, heads, seq, head_dim)
+        v_heads = einops.repeat(v_heads, "b v s d -> b (r v) s d", r=kv_repeat) # (batch, heads, seq, head_dim)
+
+        q_heads = apply_rope(q_heads, cos_table=cos, sin_table=sin) # (batch, heads, seq, head_dim) 
+        k_heads = apply_rope(k_heads, cos_table=cos, sin_table=sin) # (batch, heads, seq, head_dim)
 
         scale = 1 / (self.head_dim ** 0.5)
-        qk = q_heads @ k_heads * scale # (batch, heads, seq, seq)
+        qk = q_heads @ k_heads.transpose(-2, -1) * scale # (batch, heads, seq, seq)
 
         qk = qk + self.causal_mask[:seq, :seq] # (batch, heads, seq, seq)
 
@@ -140,19 +148,29 @@ class Attention(nn.Module):
         return out
 
 class Decoder(nn.Module):
-    cos_table: torch.Tensor
-    sin_table: torch.Tensor
-    
     def __init__(self, config: Config):
         super().__init__()
-        self.register_buffer('cos_table', torch.cos(get_rope_angles(config))) 
-        self.register_buffer('sin_table', torch.sin(get_rope_angles(config)))
+        self.pre_attn_norm = RMSnorm(config)
+        self.attention = Attention(config)
+        self.post_attn_norm = RMSnorm(config)
+        self.mlp = MLP(config)
     
-    def forward(self, x):
-        # TODO: implement
-        return x
+    def forward(self, x, cos, sin):
+        residual = x
+        x = self.pre_attn_norm(x)
+        x = self.attention(x, cos, sin)
+        x = x + residual
+
+        residual = x
+        x = self.post_attn_norm(x)
+        x = self.mlp(x)
+        x = x + residual
+        return x 
 
 class LlamaElegans(nn.Module):
+    cos_table: torch.Tensor
+    sin_table: torch.Tensor
+
     def __init__(self, config: Config):
         super().__init__()
         self.embed = nn.Embedding(num_embeddings=config.vocab_size, embedding_dim=config.hidden_size)
@@ -160,9 +178,19 @@ class LlamaElegans(nn.Module):
         self.norm = RMSnorm(config)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
+        angles = get_rope_angles(config)
+        self.register_buffer('cos_table', torch.cos(angles)) 
+        self.register_buffer('sin_table', torch.sin(angles))
+
     def forward(self, x):
         assert len(x.shape) == 2 # (batch, seq)
+        seq = x.size(1)
+
         x = self.embed(x)
-        x = self.layer(x)
+
+        cos = self.cos_table[:seq]
+        sin = self.sin_table[:seq]
+        x = self.layer(x, cos, sin)
+
         x = self.norm(x)
         return self.lm_head(x)
