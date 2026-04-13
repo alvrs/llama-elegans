@@ -35,28 +35,29 @@ from tokenizers import Tokenizer as HFTokenizer
 from tokenizers import pre_tokenizers, decoders, Regex
 from tokenizers.models import BPE
 from tokenizers.trainers import BpeTrainer
+from typing import Iterable, overload
 
 class HuggingFaceTokenizer:
     """Light wrapper around HuggingFace Tokenizer for some utilities"""
 
-    def __init__(self, tokenizer):
-        self.tokenizer = tokenizer
+    def __init__(self, tokenizer: HFTokenizer) -> None:
+        self.tokenizer: HFTokenizer = tokenizer
 
     @classmethod
-    def from_pretrained(cls, hf_path):
+    def from_pretrained(cls, hf_path: str) -> "HuggingFaceTokenizer":
         # init from a HuggingFace pretrained tokenizer (e.g. "gpt2")
         tokenizer = HFTokenizer.from_pretrained(hf_path)
         return cls(tokenizer)
 
     @classmethod
-    def from_directory(cls, tokenizer_dir):
+    def from_directory(cls, tokenizer_dir: str) -> "HuggingFaceTokenizer":
         # init from a local directory on disk (e.g. "out/tokenizer")
         tokenizer_path = os.path.join(tokenizer_dir, "tokenizer.json")
         tokenizer = HFTokenizer.from_file(tokenizer_path)
         return cls(tokenizer)
 
     @classmethod
-    def train_from_iterator(cls, text_iterator, vocab_size):
+    def train_from_iterator(cls, text_iterator: Iterable[str], vocab_size: int) -> "HuggingFaceTokenizer":
         # train from an iterator of text
         # Configure the HuggingFace Tokenizer
         tokenizer = HFTokenizer(BPE(
@@ -92,37 +93,45 @@ class HuggingFaceTokenizer:
         tokenizer.train_from_iterator(text_iterator, trainer)
         return cls(tokenizer)
 
-    def get_vocab_size(self):
+    def get_vocab_size(self) -> int:
         return self.tokenizer.get_vocab_size()
 
-    def get_special_tokens(self):
+    def get_special_tokens(self) -> list[str]:
         special_tokens_map = self.tokenizer.get_added_tokens_decoder()
         special_tokens = [w.content for w in special_tokens_map.values()]
         return special_tokens
 
-    def id_to_token(self, id):
+    def id_to_token(self, id: int) -> str | None:
         return self.tokenizer.id_to_token(id)
 
-    def _encode_one(self, text, prepend=None, append=None, num_threads=None):
+    def _encode_one(
+        self,
+        text: str,
+        prepend: str | int | None = None,
+        append: str | int | None = None,
+        num_threads: int | None = None,
+    ) -> list[int]:
         # encode a single string
         # prepend/append can be either a string of a special token or a token id directly.
         # num_threads is ignored (only used by the nanochat Tokenizer for parallel encoding)
         assert isinstance(text, str)
-        ids = []
+        ids: list[int] = []
         if prepend is not None:
             prepend_id = prepend if isinstance(prepend, int) else self.encode_special(prepend)
+            assert prepend_id is not None, f"Unknown special token: {prepend!r}"
             ids.append(prepend_id)
         ids.extend(self.tokenizer.encode(text, add_special_tokens=False).ids)
         if append is not None:
             append_id = append if isinstance(append, int) else self.encode_special(append)
+            assert append_id is not None, f"Unknown special token: {append!r}"
             ids.append(append_id)
         return ids
 
-    def encode_special(self, text):
+    def encode_special(self, text: str) -> int | None:
         # encode a single special token via exact match
         return self.tokenizer.token_to_id(text)
 
-    def get_bos_token_id(self):
+    def get_bos_token_id(self) -> int:
         # Different HuggingFace models use different BOS tokens and there is little consistency
         # 1) attempt to find a <|bos|> token
         bos = self.encode_special("<|bos|>")
@@ -133,21 +142,46 @@ class HuggingFaceTokenizer:
         assert bos is not None, "Failed to find BOS token in tokenizer"
         return bos
 
-    def encode(self, text, *args, **kwargs):
+    @overload
+    def encode(
+        self,
+        text: str,
+        prepend: str | int | None = ...,
+        append: str | int | None = ...,
+        num_threads: int | None = ...,
+    ) -> list[int]: ...
+    @overload
+    def encode(
+        self,
+        text: list[str],
+        prepend: str | int | None = ...,
+        append: str | int | None = ...,
+        num_threads: int | None = ...,
+    ) -> list[list[int]]: ...
+    def encode(
+        self,
+        text: str | list[str],
+        prepend: str | int | None = None,
+        append: str | int | None = None,
+        num_threads: int | None = None,
+    ) -> list[int] | list[list[int]]:
         if isinstance(text, str):
-            return self._encode_one(text, *args, **kwargs)
+            return self._encode_one(text, prepend=prepend, append=append, num_threads=num_threads)
         elif isinstance(text, list):
-            return [self._encode_one(t, *args, **kwargs) for t in text]
+            return [
+                self._encode_one(t, prepend=prepend, append=append, num_threads=num_threads)
+                for t in text
+            ]
         else:
             raise ValueError(f"Invalid input type: {type(text)}")
 
-    def __call__(self, *args, **kwargs):
-        return self.encode(*args, **kwargs)
+    def __call__(self, text: str | list[str]) -> list[int] | list[list[int]]:
+        return self.encode(text)
 
-    def decode(self, ids):
+    def decode(self, ids: list[int]) -> str:
         return self.tokenizer.decode(ids, skip_special_tokens=False)
 
-    def save(self, tokenizer_dir):
+    def save(self, tokenizer_dir: str) -> None:
         # save the tokenizer to disk
         os.makedirs(tokenizer_dir, exist_ok=True)
         tokenizer_path = os.path.join(tokenizer_dir, "tokenizer.json")
