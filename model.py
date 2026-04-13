@@ -105,7 +105,7 @@ class Attention(nn.Module):
         self.head_dim = config.head_dim
         self.heads = config.heads
         self.kv_heads = config.kv_heads
-        causal_mask = torch.triu(torch.ones(config.max_seq_len, config.max_seq_len), diagonal=1) * -torch.inf
+        causal_mask = torch.triu(torch.full((config.max_seq_len, config.max_seq_len), -torch.inf), diagonal=1) 
         self.register_buffer('causal_mask', causal_mask)
     
     def forward(self, x, cos, sin):
@@ -171,8 +171,9 @@ class LlamaElegans(nn.Module):
     cos_table: torch.Tensor
     sin_table: torch.Tensor
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config | None = None):
         super().__init__()
+        config = config if config is not None else Config()
         self.embed = nn.Embedding(num_embeddings=config.vocab_size, embedding_dim=config.hidden_size)
         self.layer = Decoder(config)
         self.norm = RMSnorm(config)
