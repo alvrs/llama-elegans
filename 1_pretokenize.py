@@ -11,7 +11,7 @@ from tokenizer import HuggingFaceTokenizer
 parser = argparse.ArgumentParser(description='Pre-tokenize a dataset')
 parser.add_argument('--max-docs', type=int, default=None, help='Maximum docs to pretokenize (default: all)')
 args = parser.parse_args()
-print(f"max_docs: {args.max_docs}")
+print(f"{args.max_docs=}")
 
 tokenizer = HuggingFaceTokenizer.from_directory("./out/tokenizer")
 ds = load_dataset("roneneldan/TinyStories", split="train")
