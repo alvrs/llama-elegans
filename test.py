@@ -27,8 +27,8 @@ from tokenizer import HuggingFaceTokenizer
 
 # --- Tokenizer ---
 
-tokenizer = HuggingFaceTokenizer.from_directory("./out/tokenizer")
-text = "Hello World"
-encoded = tokenizer.encode(text)
-decoded = tokenizer.decode(encoded)
-print(text, decoded)
+# tokenizer = HuggingFaceTokenizer.from_directory("./out/tokenizer")
+# text = "Hello World"
+# encoded = tokenizer.encode(text)
+# decoded = tokenizer.decode(encoded)
+# print(text, decoded)

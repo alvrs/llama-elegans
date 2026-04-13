@@ -3,6 +3,7 @@ Pre-tokenize a dataset for higher efficiency during training
 """
 import argparse
 import numpy as np
+import constants
 from tqdm import tqdm
 from datasets import Dataset, load_dataset
 from tokenizer import HuggingFaceTokenizer
@@ -36,5 +37,5 @@ val_ids = np.concatenate([np.array(doc, dtype=np.uint16) for doc in ids[-n_val:]
 print(f"train tokens: {train_ids.size:,}, val tokens: {val_ids.size:,}")
 print(f"train bytes: {train_ids.nbytes:,}, val size: {val_ids.nbytes:,}")
 
-train_ids.tofile("./out/tiny_stories_train.bin")
-val_ids.tofile("./out/tiny_stories_val.bin")
+train_ids.tofile(constants.train_dataset_path)
+val_ids.tofile(constants.val_dataset_path)
